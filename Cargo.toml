@@ -1,0 +1,24 @@
+[package]
+name = "game_bot"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+xcap = "0.3"
+enigo = "0.2"
+env_logger = "0.11"
+device_query="2.1.0"
+image="0.25"
+opencv = { version = "0.98", default-features = false, features = ["imgproc", "imgcodecs", "clang-runtime"] }
+ndarray = "0.16"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+ort = "2.0.0-rc.12"
+once_cell = "1"
+chrono = "0.4"
+rand="0.8"
+ocr-rs = "2.3"
+strsim = "0.11"
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.25", features = ["elcapitan"] }

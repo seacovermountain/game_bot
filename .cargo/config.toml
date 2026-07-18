@@ -1,0 +1,5 @@
+[env]
+# 强制在这个项目的编译期注入这两个变量，绕过 macOS 的环境变量清理机制
+LIBCLANG_PATH = "/opt/homebrew/opt/llvm/lib"
+CLANG_PATH = "/opt/homebrew/opt/llvm/bin/clang"
+DYLD_FALLBACK_LIBRARY_PATH = "/opt/homebrew/opt/llvm/lib"
