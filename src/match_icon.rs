@@ -136,12 +136,12 @@ pub fn find_icon_opencv(
     .ok()?;
 
     let similarity = max_val as f32;
-    println!(
-        "   📊 [OpenCV 匹配结果] 资产: [{:<8}] | 相似度: {:.2}% (目标: {:.2}%)",
-        asset_id,
-        similarity * 100.0,
-        min_confidence * 100.0
-    );
+    // println!(
+    //     "   📊 [OpenCV 匹配结果] 资产: [{:<8}] | 相似度: {:.2}% (目标: {:.2}%)",
+    //     asset_id,
+    //     similarity * 100.0,
+    //     min_confidence * 100.0
+    // );
 
     if similarity >= min_confidence {
         let needle_width = needle.cols() as u32;

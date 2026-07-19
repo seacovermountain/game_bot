@@ -180,13 +180,13 @@ impl ItemOcrRecognizer {
         if results.is_empty() {
             println!("   🔤 [物品OCR] 本帧未识别到任何文字块");
         } else {
-            for block in &results {
-                println!(
-                    "   🔤 [物品OCR] 识别到文字: \"{}\" | 置信度: {:.2}%",
-                    block.text,
-                    block.confidence * 100.0
-                );
-            }
+            // for block in &results {
+            //     println!(
+            //         "   🔤 [物品OCR] 识别到文字: \"{}\" | 置信度: {:.2}%",
+            //         block.text,
+            //         block.confidence * 100.0
+            //     );
+            // }
         }
 
         let mut matched = Vec::new();

@@ -1,5 +1,6 @@
 // src/game_status.rs
 
+use chrono::Local;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
@@ -16,10 +17,54 @@ pub struct LootConfig {
     pub target_items: Vec<String>,
 }
 
+/// 🔊 日志开关:每一项对应 config.toml 里 [logging] 下的一个开关。
+/// 关掉某一项只会让"正常流程信息"不再打印;真正的报错/存盘失败
+/// (println 前缀是 ⚠️/❌ 的那类失败分支)不受这里控制，一直会打印，
+/// 免得关掉某个类别之后连它出的错都看不见。
+#[derive(Debug, Deserialize, Clone)]
+pub struct LoggingConfig {
+    #[serde(default = "default_true")]
+    pub capture: bool,
+    #[serde(default = "default_true")]
+    pub position: bool,
+    #[serde(default = "default_true")]
+    pub map: bool,
+    #[serde(default = "default_true")]
+    pub monster: bool,
+    #[serde(default = "default_true")]
+    pub item: bool,
+    // "move" 是 Rust 关键字，字段名换成 movement，toml 里的键名还是 move。
+    #[serde(default = "default_true", rename = "move")]
+    pub movement: bool,
+    #[serde(default = "default_true")]
+    pub status: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        LoggingConfig {
+            capture: true,
+            position: true,
+            map: true,
+            monster: true,
+            item: true,
+            movement: true,
+            status: true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub hunting: HuntingConfig,
     pub loot: LootConfig,
+    // config.toml 里没有 [logging] 这一段也没关系，全部退化成默认开(true)。
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 /// 💾 统一的实体快照情报（怪物和物品共用坐标实体）
@@ -48,6 +93,9 @@ pub struct GameStatusCache {
     // 4. 🗃️ 运行时加载的哈希过滤器
     pub allowed_monster_set: HashSet<String>,
     pub allowed_item_set: HashSet<String>,
+
+    // 4.5 🔊 从 config.toml [logging] 段加载的日志开关
+    pub logging: LoggingConfig,
 
     // 5. 🎯 移动状态判断:角色坐标是否"长时间没有变化"(卡住/空闲),
     // 用于决定要不要打开大地图重新选择目标点。
@@ -87,6 +135,7 @@ impl GameStatusCache {
                     item_set.len()
                 );
                 self.allowed_item_set = item_set;
+                self.logging = config_data.logging;
                 return;
             }
         }
@@ -129,7 +178,10 @@ impl GameStatusCache {
             None => return false, // 坐标没读到,没法判断,先不触发
         };
 
-        match (self.last_movement_check_position, self.last_movement_check_at) {
+        match (
+            self.last_movement_check_position,
+            self.last_movement_check_at,
+        ) {
             (None, _) | (_, None) => {
                 // 第一次记录基准坐标,先观察一轮,不立即触发
                 self.last_movement_check_position = Some(current);
@@ -174,7 +226,8 @@ impl GameStatusCache {
 
     /// 📥 漂亮打印，把怪和物品清清楚楚分开展示
     pub fn print_debug_status(&self) {
-        println!("====== 💾 实时动态数据状态机快照 ======");
+        let now = Local::now().format("%H:%M:%S");
+        println!("====== 💾 [{}] 实时动态数据状态机快照 ======", now);
         println!(
             "🗺️  当前地图: {} | 坐标: ({}, {}) | ❤️ 血量: {}%",
             self.map_name, self.player_x, self.player_y, self.hp_percent
@@ -183,7 +236,7 @@ impl GameStatusCache {
         println!("⚔️  【合法战区怪】数量: {} 只", self.active_monsters.len());
         for (i, monster) in self.active_monsters.iter().enumerate() {
             println!(
-                "   └── 👾 [怪 {:02}] 名称: {:<7} | 置信度: {:.2}% -> 物理点击坐标: ({}, {})",
+                "   └── 👾 [怪 {:02}] 名称: {}({:.2}%) -> 物理点击坐标: ({}, {})",
                 i + 1,
                 monster.name,
                 monster.confidence * 100.0,
@@ -195,7 +248,7 @@ impl GameStatusCache {
         println!("💰 【地上掉落物】数量: {} 个", self.active_items.len());
         for (i, item) in self.active_items.iter().enumerate() {
             println!(
-                "   └── 💎 [物 {:02}] 名称: {:<7} | 置信度: {:.2}% -> 物理点击坐标: ({}, {})",
+                "   └── 💎 [物 {:02}] 名称: {}({:.2}%) -> 物理点击坐标: ({}, {})",
                 i + 1,
                 item.name,
                 item.confidence * 100.0,

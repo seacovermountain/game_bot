@@ -347,14 +347,14 @@ fn match_char(
     // 🐛 调试用:把每个候选框实际匹配到的最高分数打出来,方便定位到底是
     // 哪个字符分数不够、差多少 —— 之前"整体识别失败"的日志只会说
     // "未能识别到角色坐标",看不出具体卡在哪一步。
-    println!(
-        "   🔢 [坐标字符匹配] 候选框(w={},h={}) 最佳匹配: {:?} | 分数: {:.2}% (阈值: {:.2}%)",
-        char_box.w,
-        char_box.h,
-        best_label,
-        best_score * 100.0,
-        min_confidence * 100.0
-    );
+    // println!(
+    //     "   🔢 [坐标字符匹配] 候选框(w={},h={}) 最佳匹配: {:?} | 分数: {:.2}% (阈值: {:.2}%)",
+    //     char_box.w,
+    //     char_box.h,
+    //     best_label,
+    //     best_score * 100.0,
+    //     min_confidence * 100.0
+    // );
 
     if best_score >= min_confidence {
         Ok(best_label.map(|l| (l, best_score)))

@@ -43,3 +43,12 @@ target_items = [
     "兽骑统领配饰",
     "祝福油"
 ]
+
+[logging]
+capture = false    # 每轮"检测到N个候选框"
+position = false   # 坐标识别结果
+map = false        # 地图识别结果
+monster = false    # 怪物识别/攻击判断
+item = false       # 物品识别/拾取
+move = false       # 移动/寻路判断
+status = true     # 每轮末尾的完整状态快照(地图/坐标/怪物/物品一起打印)
