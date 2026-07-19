@@ -1,5 +1,12 @@
+# Dependencies
 /target
-target/
-# 调试图片（不需要提交）
-*.png
-!*.png  # 如果你以后有需要提交的 PNG 再单独处理
+
+# macOS
+.DS_Store
+
+# Debug images
+DEBUG_*.png
+
+# Editor/IDE
+.vscode/
+.idea/
