@@ -28,6 +28,8 @@ use crate::util;
 /// const,现在跟着 App 一起放这里,bot_loop 里直接引用。
 pub const STUCK_CHECK_INTERVAL: Duration = Duration::from_secs(4);
 pub const STUCK_MOVE_EPSILON: f64 = 5.0;
+/// 🗺️ 大地图导航失败后的冷却时长,冷却结束会自动重试,而不是永久禁用。
+pub const MAP_NAV_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 
 /// 持有整场挂机会话需要跨循环轮次共享的一切状态:
 /// 窗口句柄、鼠标控制器、各类模板库/识别配置、以及若干"只做一次"的
@@ -53,13 +55,20 @@ pub struct App {
     pub dumped_map_debug: bool,
     /// 数字模板库还没建好的话,第一次跑先把坐标区域裁出来,方便你校准 ROI + 建模板
     pub dumped_position_debug: bool,
-    /// 有的地图可能不支持"打开大地图点选点"这套流程(比如面板布局不同、
-    /// 关闭按钮识别不到),一旦确认不支持就整段会话都不再重试,直接放弃
-    /// 移动(挂机原地打怪/等下一轮识别),避免每轮循环都浪费时间空跑一次。
-    pub map_nav_supported: bool,
+    /// 🗺️ 大地图导航上一次失败后的冷却截止时间。为 None 表示当前没有
+    /// 冷却中,可以随时尝试;为 Some(t) 表示要等到 t 之后才重新尝试,
+    /// 避免一次失败(比如动画卡顿/没找到可行走点)就整场会话永久放弃。
+    pub map_nav_retry_after: Option<std::time::Instant>,
     /// 🐛 支持通过环境变量持续导出怪物候选框调试图,方便建怪物名字模板库。
     /// 用法: DEBUG_MONSTER=1 cargo run
     pub debug_monster: bool,
+
+    /// 🔘 大地图"关闭按钮"上一次成功识别到的绝对屏幕坐标缓存。按钮在
+    /// 屏幕上的物理位置是固定的,一旦识别成功过一次就把坐标存起来,
+    /// 以后哪怕某一轮模板匹配偶然失误(比如面板动画没播完/截图花屏),
+    /// 也能直接用缓存坐标兜底点击,不至于让整场会话因为一次识别失误
+    /// 就判定"这张地图不支持"。
+    pub close_map_button_cache: Option<(i32, i32)>,
 }
 
 impl App {
@@ -199,8 +208,9 @@ impl App {
             item_ocr_recognizer,
             dumped_map_debug: false,
             dumped_position_debug,
-            map_nav_supported: true,
+            map_nav_retry_after: None,
             debug_monster,
+            close_map_button_cache: None,
         }
     }
 }

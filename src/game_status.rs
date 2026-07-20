@@ -76,6 +76,22 @@ pub struct EntityInfo {
     pub confidence: f32, // 识别置信度(模板匹配分数,0.0~1.0)
 }
 
+/// 🎯 本轮"移动状态"判断结果,细分成五种含义不同的情况,方便调用方
+/// 打印准确的日志,而不是笼统地都算作"没有卡住"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovementStatus {
+    /// 这一轮没能读到坐标(数字模板库为空,或本轮识别失败)
+    NoPosition,
+    /// 第一次记录基准坐标,还没开始判断
+    FirstObservation,
+    /// 还没到 check_interval 这个检查点,先观察
+    Cooling,
+    /// 到了检查点,判定角色确实在移动
+    Moving,
+    /// 到了检查点,判定角色卡住了(坐标基本没变)
+    Stalled,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GameStatusCache {
     // 1. 地图与位置监控
@@ -152,30 +168,30 @@ impl GameStatusCache {
     pub fn update_map_name(&mut self, name: String) {
         self.map_name = name;
     }
-
-    /// 🎯 判断角色坐标是否"长时间没有变化"(卡住/空闲),用于决定要不要
-    /// 打开大地图重新选择目标点 —— 不需要额外的局部方向试探,因为点了
-    /// 大地图目标点之后,角色会被引擎自动寻路接管、持续走到目标位置。
+    /// 🎯 判断角色本轮的"移动状态"细分成五种含义不同的情况,而不是
+    /// 笼统地返回一个 bool——不然调用方没法区分"真的在移动"和"还没到
+    /// 检查时间点/没读到坐标"这几种完全不同的场景,日志也会因此写得
+    /// 不准确。
     ///
-    /// 每隔 check_interval 才会真正做一次判断;这段时间内直接返回
-    /// false,给角色留出时间真正走出位移,避免拿两次间隔太短的坐标
-    /// 比较导致误判。判断完(不管结果是"动了"还是"没动")都会重新记录
-    /// 一次基准坐标和时间,自然形成两次判断之间的冷却间隔,不需要再
-    /// 额外单独维护一个冷却计时器。
+    /// 每隔 check_interval 才会真正做一次"动没动"的判断;这段时间内
+    /// 直接返回 `Cooling`,给角色留出时间真正走出位移,避免拿两次间隔
+    /// 太短的坐标比较导致误判。判断完(不管结果是 Moving 还是 Stalled)
+    /// 都会重新记录一次基准坐标和时间,自然形成两次判断之间的冷却间隔,
+    /// 不需要再额外单独维护一个冷却计时器。
     ///
     /// `current_position` 传入这一轮 position_reader 实际读到的坐标
     /// (读取失败传 None),而不是直接读 self.player_x/player_y —— 因为
     /// 读取失败的轮次里这两个字段还停留在上一次成功读取的旧值,直接用
     /// 会掩盖"这一轮根本没读到坐标"这个事实。
-    pub fn has_position_stalled(
+    pub fn check_movement_status(
         &mut self,
         current_position: Option<(i32, i32)>,
         move_epsilon: f64,
         check_interval: Duration,
-    ) -> bool {
+    ) -> MovementStatus {
         let current = match current_position {
             Some(p) => p,
-            None => return false, // 坐标没读到,没法判断,先不触发
+            None => return MovementStatus::NoPosition, // 坐标没读到,没法判断
         };
 
         match (
@@ -183,14 +199,14 @@ impl GameStatusCache {
             self.last_movement_check_at,
         ) {
             (None, _) | (_, None) => {
-                // 第一次记录基准坐标,先观察一轮,不立即触发
+                // 第一次记录基准坐标,先观察一轮,不立即判断
                 self.last_movement_check_position = Some(current);
                 self.last_movement_check_at = Some(Instant::now());
-                false
+                MovementStatus::FirstObservation
             }
             (Some(prev), Some(t)) => {
                 if t.elapsed() < check_interval {
-                    return false;
+                    return MovementStatus::Cooling;
                 }
 
                 let dx = (current.0 - prev.0) as f64;
@@ -200,7 +216,11 @@ impl GameStatusCache {
                 self.last_movement_check_position = Some(current);
                 self.last_movement_check_at = Some(Instant::now());
 
-                dist < move_epsilon
+                if dist < move_epsilon {
+                    MovementStatus::Stalled
+                } else {
+                    MovementStatus::Moving
+                }
             }
         }
     }

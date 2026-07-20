@@ -300,9 +300,6 @@ pub fn open_big_map(window: &Window, enigo: &mut Enigo, cfg: &NavConfig) {
     thread::sleep(Duration::from_millis(200));
 }
 
-/// 🖱️ 关闭大地图面板。用图标匹配定位关闭按钮,而不是写死坐标,
-/// 面板弹出位置/尺寸万一有偏移也不受影响。
-/// 返回是否成功找到并点击了关闭按钮。
 pub fn close_big_map(
     window: &Window,
     enigo: &mut Enigo,
@@ -310,12 +307,18 @@ pub fn close_big_map(
     width: u32,
     height: u32,
     cfg: &NavConfig,
+    close_button_cache: &mut Option<(i32, i32)>,
 ) -> bool {
     match find_close_button(raw_rgba, width, height, cfg) {
         Some(((px, py), score)) => {
             let (scale_x, scale_y) = compute_scale_factor(window, width, height);
             let click_x = window.x() + (px as f32 / scale_x) as i32;
             let click_y = window.y() + (py as f32 / scale_y) as i32;
+
+            // ✅ 识别成功,顺手把这次的绝对屏幕坐标缓存起来,供下次识别
+            // 失误时兜底使用。
+            *close_button_cache = Some((click_x, click_y));
+
             println!(
                 "🗺️  [地图导航] 找到关闭按钮(置信度 {:.2}%),点击关闭: ({}, {})",
                 score * 100.0,
@@ -327,8 +330,21 @@ pub fn close_big_map(
             true
         }
         None => {
-            println!("⚠️  [地图导航] 未能定位到关闭按钮,大地图面板可能未成功打开");
-            false
+            // 🩹 这一轮没识别到,不代表按钮真的消失了(大概率是面板动画
+            // 没播完/截图恰好花屏这种偶发情况)——如果之前成功缓存过
+            // 坐标,直接用缓存兜底点击。
+            if let Some((cx, cy)) = *close_button_cache {
+                println!(
+                    "⚠️  [地图导航] 本轮未能重新匹配到关闭按钮,使用上次缓存坐标兜底点击: ({}, {})",
+                    cx, cy
+                );
+                mouse_action::click_at(enigo, cx, cy, "【地图导航】关闭大地图(缓存坐标兜底)");
+                thread::sleep(Duration::from_millis(200));
+                true
+            } else {
+                println!("⚠️  [地图导航] 未能定位到关闭按钮,大地图面板可能未成功打开");
+                false
+            }
         }
     }
 }
@@ -346,6 +362,7 @@ pub fn navigate_to_random_point(
     window: &Window,
     enigo: &mut Enigo,
     cfg: &NavConfig,
+    close_button_cache: &mut Option<(i32, i32)>,
 ) -> Result<bool> {
     open_big_map(window, enigo, cfg);
 
@@ -357,12 +374,27 @@ pub fn navigate_to_random_point(
         }
     };
 
-    // 先确认面板确实打开了(能找到关闭按钮),找不到说明这条路走不通,
-    // 让调用方退回旧的手动方向试探逻辑。
-    let close_btn = find_close_button(&raw_rgba, width, height, cfg);
-    if close_btn.is_none() {
-        println!("⚠️  [地图导航] 打开地图后未检测到关闭按钮,判定这张地图暂不支持该流程");
-        return Ok(false);
+    match find_close_button(&raw_rgba, width, height, cfg) {
+        Some(((px, py), _score)) => {
+            // ✅ 识别成功,顺手刷新一次缓存坐标。
+            let (scale_x, scale_y) = compute_scale_factor(window, width, height);
+            *close_button_cache = Some((
+                window.x() + (px as f32 / scale_x) as i32,
+                window.y() + (py as f32 / scale_y) as i32,
+            ));
+        }
+        None => {
+            // 🩹 这一轮没识别到关闭按钮不代表面板没打开——如果之前
+            // 缓存过坐标,说明这张地图本来就支持这套流程,只是这一轮
+            // 识别偶然失误,不该直接判定"不支持"。
+            if close_button_cache.is_none() {
+                println!("⚠️  [地图导航] 打开地图后未检测到关闭按钮,判定这张地图暂不支持该流程");
+                return Ok(false);
+            }
+            println!(
+                "⚠️  [地图导航] 打开地图后本轮未识别到关闭按钮,凭缓存记录判定面板已打开,继续尝试"
+            );
+        }
     }
 
     let bgr = crate::monster_detector::rgba_bytes_to_bgr_mat(&raw_rgba, width, height)?;
@@ -387,7 +419,7 @@ pub fn navigate_to_random_point(
             mouse_action::click_at(enigo, click_x, click_y, "【地图导航】点击地图目标点");
 
             // 给引擎一点时间计算路径(青色虚线出现)
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(200));
             true
         }
         None => {
@@ -400,7 +432,15 @@ pub fn navigate_to_random_point(
     // 战斗/移动判断。
     let (raw_rgba2, width2, height2) =
         util::capture_window(window).unwrap_or((raw_rgba, width, height));
-    close_big_map(window, enigo, &raw_rgba2, width2, height2, cfg);
+    close_big_map(
+        window,
+        enigo,
+        &raw_rgba2,
+        width2,
+        height2,
+        cfg,
+        close_button_cache,
+    );
 
     Ok(clicked)
 }

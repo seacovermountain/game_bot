@@ -8,12 +8,13 @@
 //! 想改某一步的逻辑(比如物品识别)直接找对应的函数即可,不用在几百
 //! 行里定位缩进层级。
 
+use crate::game_status::MovementStatus;
+use opencv::core::Mat;
 use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 
-use opencv::core::Mat;
-
-use crate::app::{App, STUCK_CHECK_INTERVAL, STUCK_MOVE_EPSILON};
+use crate::app::{App, MAP_NAV_RETRY_COOLDOWN, STUCK_CHECK_INTERVAL, STUCK_MOVE_EPSILON};
 use crate::game_status::EntityInfo;
 use crate::map_matcher;
 use crate::map_nav;
@@ -247,7 +248,7 @@ fn try_pick_up_items(app: &mut App, bgr_mat: &opencv::Result<Mat>) -> bool {
     };
 
     mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
-
+    mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
     // 🎯 拾取优先级 > 自动攻击 > 自动寻路移动。点击拾取按钮后固定等待
     // 2秒,让角色有时间跑过去把物品捡起来,这段时间内不做怪物攻击/移动
     // 判断(不会打断已经在进行的自动战斗,只是这一轮循环不再额外发出
@@ -255,7 +256,7 @@ fn try_pick_up_items(app: &mut App, bgr_mat: &opencv::Result<Mat>) -> bool {
     if app.live_status.logging.item {
         println!("⏳ [拾取] 等待角色跑过去拾取(约2秒)，本轮跳过打怪/寻路判断...");
     }
-    sleep(Duration::from_secs(2));
+    sleep(Duration::from_secs(1));
     true
 }
 
@@ -359,44 +360,77 @@ fn attack(app: &mut App) {
     mouse_action::click_at(&mut app.enigo, x, y, "【自动攻击】大剑普通攻击");
 }
 
-/// 🚶 没发现目标时,根据角色真实坐标有没有变化决定要不要打开大地图
-/// 重新选一个目标点:
-/// - 坐标在变 -> 角色正在自动走路,什么都不做,继续等
-/// - 坐标没变 -> 已经走到目标点停下了,或者压根没在动(刚进入这个状态/
-///   卡住了),该打开大地图选一个新目标点,点击后靠引擎自动寻路把角色带过去
 fn maybe_move(app: &mut App, current_position: Option<(i32, i32)>) {
-    if !app.live_status.has_position_stalled(
+    let status = app.live_status.check_movement_status(
         current_position,
         STUCK_MOVE_EPSILON,
         STUCK_CHECK_INTERVAL,
-    ) {
-        if app.live_status.logging.movement {
-            println!("🚶 [移动] 角色坐标正在变化或仍在观察窗口内,继续等待...");
+    );
+
+    match status {
+        MovementStatus::NoPosition => {
+            if app.live_status.logging.movement {
+                println!("🚶 [移动] 本轮没有读到坐标,暂不判断是否卡住,继续等待...");
+            }
+            return;
         }
-        return;
+        MovementStatus::FirstObservation => {
+            if app.live_status.logging.movement {
+                println!("🚶 [移动] 记录初始基准坐标,先观察一轮...");
+            }
+            return;
+        }
+        MovementStatus::Cooling => {
+            if app.live_status.logging.movement {
+                println!("🚶 [移动] 还没到卡住检查点,继续观察...");
+            }
+            return;
+        }
+        MovementStatus::Moving => {
+            if app.live_status.logging.movement {
+                println!("🚶 [移动] 坐标确实在变化,角色正在移动,继续等待...");
+            }
+            return;
+        }
+        MovementStatus::Stalled => {} // 往下走,尝试打开大地图
     }
 
-    if !app.map_nav_supported {
-        if app.live_status.logging.movement {
-            println!("⚠️  [移动] 地图导航不可用,当前没有可用的移动方式,原地等待...");
+    if let Some(retry_at) = app.map_nav_retry_after {
+        if Instant::now() < retry_at {
+            if app.live_status.logging.movement {
+                let remain = retry_at.saturating_duration_since(Instant::now()).as_secs();
+                println!(
+                    "⚠️  [移动] 地图导航冷却中,约 {} 秒后重试,原地等待...",
+                    remain
+                );
+            }
+            return;
         }
-        return;
     }
 
     if app.live_status.logging.movement {
         println!("🗺️  [移动] 角色坐标未变化,打开大地图选取新目标点...");
     }
-    match map_nav::navigate_to_random_point(&app.window, &mut app.enigo, &app.nav_cfg) {
+    match map_nav::navigate_to_random_point(
+        &app.window,
+        &mut app.enigo,
+        &app.nav_cfg,
+        &mut app.close_map_button_cache,
+    ) {
         Ok(true) => {
+            app.map_nav_retry_after = None;
             if app.live_status.logging.movement {
                 println!("✅ [移动] 已触发引擎自动寻路,交给引擎接管这段路");
             }
         }
         Ok(false) => {
+            app.map_nav_retry_after = Some(Instant::now() + MAP_NAV_RETRY_COOLDOWN);
             if app.live_status.logging.movement {
-                println!("⚠️  [移动] 当前地图不支持该流程,本次会话后续不再尝试自动寻路移动");
+                println!(
+                    "⚠️  [移动] 本次大地图导航未成功,{} 秒后再重试",
+                    MAP_NAV_RETRY_COOLDOWN.as_secs()
+                );
             }
-            app.map_nav_supported = false;
         }
         Err(e) => println!("⚠️  [移动] 执行出错: {:?}", e),
     }
