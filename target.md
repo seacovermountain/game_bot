@@ -16,6 +16,3 @@ mouse_action.rs 鼠标操作部分
 movement.rs 人物移动部分
 quit_gmae_bot.rs  脚本退出部分
 util.rs 工具类
-DEBUG_MONSTER=1 cargo run
-DEBUG_POSITION=1 cargo run
-CLICK_MODE=background cargo run

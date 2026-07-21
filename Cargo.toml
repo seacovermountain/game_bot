@@ -2,6 +2,16 @@
 name = "game_bot"
 version = "0.1.0"
 edition = "2024"
+default-run = "game_bot"
+
+
+[lib]
+name = "game_bot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "game_bot"
+path = "src/main.rs"
 
 
 [dependencies]

@@ -15,13 +15,13 @@ use xcap::Window;
 
 use crate::asset_loader::{self, IconButton};
 use crate::game_status::GameStatusCache;
-use crate::item_ocr::{ItemOcrConfig, ItemOcrRecognizer};
 use crate::map_matcher::{self, MapReaderConfig, MapTemplate};
 use crate::map_nav::NavConfig;
 use crate::monster_detector::DetectorConfig;
 use crate::monster_matcher::{self, MonsterTemplate};
 use crate::mouse_action;
 use crate::position_reader::{self, DigitTemplate, PositionReaderConfig};
+use crate::text_ocr::{TextOcrConfig, TextOcrRecognizer};
 use crate::util;
 
 /// 🚶 判断"角色坐标是否停滞"用的两个阈值,原来是 main() 里的局部
@@ -44,12 +44,14 @@ pub struct App {
     pub pos_cfg: PositionReaderConfig,
     pub map_cfg: MapReaderConfig,
     pub nav_cfg: NavConfig,
-    pub item_ocr_cfg: ItemOcrConfig,
+    pub text_ocr_cfg: TextOcrConfig,
 
     pub templates: Vec<MonsterTemplate>,
     pub digit_templates: Vec<DigitTemplate>,
     pub map_templates: Vec<MapTemplate>,
-    pub item_ocr_recognizer: Option<ItemOcrRecognizer>,
+    /// 🎯 怪物 + 物品共用同一个 OCR 引擎、同一份识别配置——一帧只
+    /// 识别一次,识别结果分别去匹配怪物白名单和物品白名单。
+    pub text_ocr_recognizer: Option<TextOcrRecognizer>,
 
     /// 🐛 地图名字 ROI 位置目前是目测估算,还没有 DEBUG 图核实过,第一轮先存一张调试图
     pub dumped_map_debug: bool,
@@ -159,19 +161,20 @@ impl App {
             );
         }
 
-        let item_ocr_cfg = ItemOcrConfig::default();
+        let text_ocr_cfg = TextOcrConfig::default();
         // 🎯 OCR 引擎只在启动时加载一次(det/rec 模型 + 字典),不要每轮循环
         // 都重新加载,模型文件需要你提前下载放到 CARGO_MANIFEST_DIR/models/
-        let item_ocr_dir = format!("{}/models", env!("CARGO_MANIFEST_DIR"));
-        let item_ocr_recognizer = match ItemOcrRecognizer::new(
-            &format!("{}/PP-OCRv6_medium_det.mnn", item_ocr_dir),
-            &format!("{}/PP-OCRv6_medium_rec.mnn", item_ocr_dir),
-            &format!("{}/ppocr_keys_v6_medium.txt", item_ocr_dir),
+        // 怪物 + 物品识别共用这一个引擎实例,一帧只识别一次。
+        let ocr_model_dir = format!("{}/models", env!("CARGO_MANIFEST_DIR"));
+        let text_ocr_recognizer = match TextOcrRecognizer::new(
+            &format!("{}/PP-OCRv6_medium_det.mnn", ocr_model_dir),
+            &format!("{}/PP-OCRv6_medium_rec.mnn", ocr_model_dir),
+            &format!("{}/ppocr_keys_v6_medium.txt", ocr_model_dir),
         ) {
             Ok(r) => Some(r),
             Err(e) => {
                 println!(
-                    "⚠️  [物品OCR] 引擎初始化失败: {:?}，本次会话将无法识别物品。请确认 models/ 目录下模型文件是否齐全。",
+                    "⚠️  [OCR] 引擎初始化失败: {:?}，本次会话将无法识别怪物/物品。请确认 models/ 目录下模型文件是否齐全。",
                     e
                 );
                 None
@@ -201,11 +204,11 @@ impl App {
             pos_cfg,
             map_cfg,
             nav_cfg,
-            item_ocr_cfg,
+            text_ocr_cfg,
             templates,
             digit_templates,
             map_templates,
-            item_ocr_recognizer,
+            text_ocr_recognizer,
             dumped_map_debug: false,
             dumped_position_debug,
             map_nav_retry_after: None,

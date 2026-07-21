@@ -10,6 +10,7 @@
 
 use crate::game_status::MovementStatus;
 use opencv::core::Mat;
+use opencv::prelude::MatTraitConst;
 use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
@@ -19,9 +20,9 @@ use crate::game_status::EntityInfo;
 use crate::map_matcher;
 use crate::map_nav;
 use crate::monster_detector::{self, TextBox};
-use crate::monster_matcher;
 use crate::mouse_action;
 use crate::position_reader;
+use crate::text_ocr;
 use crate::util;
 
 /// 循环检测怪物:发现白名单怪物就攻击，没发现就移动寻路。
@@ -62,14 +63,18 @@ fn run_one_frame(app: &mut App, raw_rgba: &[u8], width: u32, height: u32) {
     dump_position_debug_once(app, &bgr_mat);
     let current_position = read_current_position(app, &bgr_mat);
 
-    dump_and_identify_map(app, &bgr_mat);
+    // 🎯 怪物 + 物品 + 地图名字共用同一份 OCR 结果:一帧只识别一次,
+    // 不再分别各跑一遍检测+识别。
+    let text_blocks = recognize_text_once(app, &bgr_mat);
+
+    dump_and_identify_map(app, &bgr_mat, &text_blocks);
 
     // 💰 拾取优先级最高:发现白名单物品就直接点拾取按钮,本轮剩余的
     // 打怪/移动判断就都跳过。
-    let picked_up = try_pick_up_items(app, &bgr_mat);
+    let picked_up = try_pick_up_items(app, &text_blocks);
 
     if !picked_up {
-        let should_attack = detect_monsters_and_should_attack(app, &bgr_mat, &boxes);
+        let should_attack = detect_monsters_and_should_attack(app, &text_blocks);
 
         if should_attack {
             attack(app);
@@ -150,10 +155,17 @@ fn read_current_position(app: &mut App, bgr_mat: &opencv::Result<Mat>) -> Option
 /// 🗺️ 识别当前地图名字(跟坐标/怪物识别同一帧、同一频率，避免"旧地图
 /// 名字 + 新怪物列表"这种状态不一致的情况)。
 ///
-/// 🐛 调试图导出不依赖模板库是否存在:哪怕 templates/map_names/ 还是空
-/// 目录(还没开始建模板)，也应该正常存出 DEBUG_MAP_ROI.png 方便你核对
-/// ROI 范围。
-fn dump_and_identify_map(app: &mut App, bgr_mat: &opencv::Result<Mat>) {
+/// 🔄 地图名字识别已经从"模板匹配"换成了 OCR:直接从 `text_blocks`
+/// (怪物+物品那次整帧 OCR 的同一份结果)里挑出落在牌匾区域的文字,
+/// 不需要再单独截图/单独跑一次识别,也不需要维护 `templates/map_names/`
+/// 模板库了。
+///
+/// 🐛 调试图导出保留:方便你核对牌匾 ROI 范围是否需要微调。
+fn dump_and_identify_map(
+    app: &mut App,
+    bgr_mat: &opencv::Result<Mat>,
+    text_blocks: &[text_ocr::RawTextBlock],
+) {
     let Ok(mat) = bgr_mat else { return };
 
     if !app.dumped_map_debug {
@@ -169,12 +181,8 @@ fn dump_and_identify_map(app: &mut App, bgr_mat: &opencv::Result<Mat>) {
         app.dumped_map_debug = true;
     }
 
-    if app.map_templates.is_empty() {
-        return;
-    }
-
-    match map_matcher::identify_map(mat, &app.map_cfg, &app.map_templates, 0.8) {
-        Ok(Some((name, score))) => {
+    match text_ocr::match_map_name(text_blocks, mat.cols(), mat.rows(), &app.text_ocr_cfg) {
+        Some((name, score)) => {
             if app.live_status.logging.map {
                 println!(
                     "🗺️  [地图识别] 当前地图: {} | 置信度: {:.2}%",
@@ -184,31 +192,43 @@ fn dump_and_identify_map(app: &mut App, bgr_mat: &opencv::Result<Mat>) {
             }
             app.live_status.update_map_name(name);
         }
-        Ok(None) => {
+        None => {
             if app.live_status.logging.map {
-                println!("⚠️  [地图识别] 未能匹配到任何已知地图名字模板");
+                println!("⚠️  [地图识别] 本轮未能从牌匾区域识别出地图名字");
             }
         }
-        Err(e) => println!("⚠️  [地图识别] 识别失败: {:?}", e),
+    }
+}
+
+/// 🎯 一帧只跑一次 OCR(怪物名字 + 物品名字共用同一份原始识别结果)。
+/// OCR 引擎没初始化成功,或者转 Mat 失败,都返回空列表——下游的拾取/
+/// 攻击判断函数看到空列表自然就是"这一轮什么都没识别到"。
+fn recognize_text_once(
+    app: &mut App,
+    bgr_mat: &opencv::Result<Mat>,
+) -> Vec<text_ocr::RawTextBlock> {
+    let (Ok(mat), Some(recognizer)) = (bgr_mat, &app.text_ocr_recognizer) else {
+        return Vec::new();
+    };
+
+    match recognizer.recognize_frame(mat, &app.text_ocr_cfg) {
+        Ok(blocks) => blocks,
+        Err(e) => {
+            println!("⚠️  [OCR] 识别失败: {:?}", e);
+            Vec::new()
+        }
     }
 }
 
 /// 💰 检测地面掉落物品(OCR 识别文字 + 白名单模糊匹配)。
 /// 发现白名单物品就点击拾取按钮并等待角色跑过去,返回 `true` 表示
 /// "本轮循环应该到此为止,跳过后面的打怪/移动判断"。
-fn try_pick_up_items(app: &mut App, bgr_mat: &opencv::Result<Mat>) -> bool {
-    let (Ok(mat), Some(recognizer)) = (bgr_mat, &app.item_ocr_recognizer) else {
-        return false;
-    };
-
-    let matched =
-        match recognizer.detect_items(mat, &app.item_ocr_cfg, &app.live_status.allowed_item_set) {
-            Ok(matched) => matched,
-            Err(e) => {
-                println!("⚠️  [物品OCR] 识别失败: {:?}", e);
-                return false;
-            }
-        };
+fn try_pick_up_items(app: &mut App, text_blocks: &[text_ocr::RawTextBlock]) -> bool {
+    let matched = text_ocr::match_items(
+        text_blocks,
+        &app.live_status.allowed_item_set,
+        &app.text_ocr_cfg,
+    );
 
     if matched.is_empty() {
         app.live_status.update_items(Vec::new());
@@ -261,44 +281,19 @@ fn try_pick_up_items(app: &mut App, bgr_mat: &opencv::Result<Mat>) -> bool {
 }
 
 /// 🎯 识别怪物候选框里有没有白名单怪物,决定这一轮要不要发起攻击。
+///
+/// 🔄 怪物名字识别已经从"颜色阈值检测候选框 + 模板匹配"换成了 OCR,
+/// 而且跟物品识别共用同一份 `text_blocks`(一帧只识别一次),这里
+/// 只是从里面筛出怪物白名单命中,不再自己触发 OCR 调用。
 fn detect_monsters_and_should_attack(
     app: &mut App,
-    bgr_mat: &opencv::Result<Mat>,
-    boxes: &[TextBox],
+    text_blocks: &[text_ocr::RawTextBlock],
 ) -> bool {
-    if app.templates.is_empty() {
-        if !boxes.is_empty() {
-            if app.live_status.logging.monster {
-                println!("⚠️  [自动攻击] 模板库为空，检测到候选文字框，先尝试点击攻击按钮。");
-            }
-            return true;
-        }
-        if app.live_status.logging.monster {
-            println!("⏳ [自动攻击] 当前未检测到怪物候选文字框，继续轮询...");
-        }
-        return false;
-    }
-
-    let mat = match bgr_mat {
-        Ok(mat) => mat,
-        Err(e) => {
-            println!("⚠️  [调试] RGBA 转 Mat 失败: {:?}", e);
-            return false;
-        }
-    };
-
-    let identified = match monster_matcher::identify_monsters(mat, boxes, &app.templates, 0.75) {
-        Ok(identified) => identified,
-        Err(e) => {
-            println!("⚠️  [怪物识别] 识别失败: {:?}", e);
-            return false;
-        }
-    };
-
-    let allowed_monsters: Vec<_> = identified
-        .into_iter()
-        .filter(|(name, _, _)| app.live_status.allowed_monster_set.contains(name))
-        .collect();
+    let allowed_monsters = text_ocr::match_monsters(
+        text_blocks,
+        &app.live_status.allowed_monster_set,
+        &app.text_ocr_cfg,
+    );
 
     if allowed_monsters.is_empty() {
         if app.live_status.logging.monster {

@@ -107,6 +107,16 @@ pub struct DetectorConfig {
     // 而 UI 图标、头像、按钮边角这类误检大多接近正方形。用这个比值
     // 把接近正方形的噪声块排除掉，不用只靠 ROI 边界死磕。
     pub min_aspect_ratio: f64,
+
+    // 🩹 兜底重试专用的"小闭运算核":有些怪物的名字文字紧贴着贴图上的
+    // 高光/金属反光(缝隙只有几像素),用上面 close_kernel_w/h 那组参数
+    // 闭运算后,名字会直接跟贴图粘成一大块,尺寸超过 max_w/max_h 被整体
+    // 丢弃。与其把全局闭运算核调小(容易把其他本来能正常识别的怪物名字
+    // 拆散、影响面更大),不如只对"因为太大而被丢弃"的色块单独重试一次:
+    // 回到闭运算之前的原始掩码,只在这个色块范围内用更小的核重新做一次
+    // 闭运算+连通域分析,看看能不能拆出一个尺寸合格的文字框。
+    pub fallback_close_kernel_w: i32,
+    pub fallback_close_kernel_h: i32,
 }
 
 impl Default for DetectorConfig {
@@ -134,6 +144,12 @@ impl Default for DetectorConfig {
             min_area: 150,
 
             min_aspect_ratio: 1.3,
+
+            // 实测(见调试记录):宽 25 / 高 5 能在"名字紧贴怪物贴图高光"的
+            // 场景里,把名字从贴图里拆出来,同时还足够把同一行文字的多个
+            // 字粘合成一个连通块。
+            fallback_close_kernel_w: 25,
+            fallback_close_kernel_h: 5,
         }
     }
 }
@@ -285,11 +301,110 @@ pub fn detect_monster_names(img: &Mat, cfg: &DetectorConfig) -> Result<Vec<TextB
                     h,
                     area,
                 });
+                continue;
             }
+        }
+
+        // 🩹 兜底重试:这个色块之所以没通过筛选,是不是"太大"了
+        // (超过 max_w 或 max_h)?如果是,很可能是名字文字跟旁边贴图的
+        // 高光粘在一起了——回到闭运算之前的原始掩码,只在这个色块的
+        // 范围内,用更小的核重新做一次闭运算 + 连通域分析,看看能不能
+        // 拆出一个尺寸合格的文字框。(太小/宽高比不对被刷掉的色块,
+        // 本来就是噪点,不需要重试。)
+        if w >= cfg.max_w || h >= cfg.max_h {
+            let recovered =
+                recover_oversized_blob(&mask, Rect::new(x, y, w, h), cfg, roi.x, roi.y)?;
+            boxes.extend(recovered);
         }
     }
 
     Ok(boxes)
+}
+
+/// 🩹 对"因为太大被判定不合格"的色块做兜底重试:回到闭运算之前的原始
+/// 掩码,截取这个色块的范围(留一点边距),用比全局默认小得多的闭运算核
+/// 重新做一次闭运算 + 连通域分析,只保留同样通过标准尺寸/宽高比筛选的
+/// 结果——避免真的只是"一大片无关噪点"的情况也被硬凑出候选框。
+///
+/// `roi_x`/`roi_y` 是外层 ROI 在整帧图里的偏移,`blob_rect` 是色块在
+/// ROI 坐标系里的位置,返回的 `TextBox` 已经换算回整帧坐标系。
+fn recover_oversized_blob(
+    raw_mask: &Mat,
+    blob_rect: Rect,
+    cfg: &DetectorConfig,
+    roi_x: i32,
+    roi_y: i32,
+) -> Result<Vec<TextBox>> {
+    const MARGIN: i32 = 4;
+
+    let x = (blob_rect.x - MARGIN).max(0);
+    let y = (blob_rect.y - MARGIN).max(0);
+    let w = (blob_rect.width + MARGIN * 2).min(raw_mask.cols() - x);
+    let h = (blob_rect.height + MARGIN * 2).min(raw_mask.rows() - y);
+
+    if w <= 0 || h <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let sub_mask = Mat::roi(raw_mask, Rect::new(x, y, w, h))?;
+
+    let small_kernel = imgproc::get_structuring_element(
+        imgproc::MORPH_RECT,
+        Size::new(cfg.fallback_close_kernel_w, cfg.fallback_close_kernel_h),
+        Point::new(-1, -1),
+    )?;
+    let mut sub_closed = Mat::default();
+    imgproc::morphology_ex(
+        &sub_mask,
+        &mut sub_closed,
+        imgproc::MORPH_CLOSE,
+        &small_kernel,
+        Point::new(-1, -1),
+        1,
+        core::BORDER_CONSTANT,
+        imgproc::morphology_default_border_value()?,
+    )?;
+
+    let mut sub_labels = Mat::default();
+    let mut sub_stats = Mat::default();
+    let mut sub_centroids = Mat::default();
+    let sub_num = imgproc::connected_components_with_stats(
+        &sub_closed,
+        &mut sub_labels,
+        &mut sub_stats,
+        &mut sub_centroids,
+        8,
+        CV_32S,
+    )?;
+
+    let mut recovered = Vec::new();
+    for i in 1..sub_num {
+        let sx = *sub_stats.at_2d::<i32>(i, imgproc::CC_STAT_LEFT)?;
+        let sy = *sub_stats.at_2d::<i32>(i, imgproc::CC_STAT_TOP)?;
+        let sw = *sub_stats.at_2d::<i32>(i, imgproc::CC_STAT_WIDTH)?;
+        let sh = *sub_stats.at_2d::<i32>(i, imgproc::CC_STAT_HEIGHT)?;
+        let sarea = *sub_stats.at_2d::<i32>(i, imgproc::CC_STAT_AREA)?;
+
+        if sh > cfg.min_h
+            && sh < cfg.max_h
+            && sw > cfg.min_w
+            && sw < cfg.max_w
+            && sarea > cfg.min_area
+        {
+            let aspect_ratio = sw as f64 / sh as f64;
+            if aspect_ratio >= cfg.min_aspect_ratio {
+                recovered.push(TextBox {
+                    x: roi_x + x + sx,
+                    y: roi_y + y + sy,
+                    w: sw,
+                    h: sh,
+                    area: sarea,
+                });
+            }
+        }
+    }
+
+    Ok(recovered)
 }
 
 /// 🎯 一步到位的入口函数:直接吃 `util::capture_window()` 产出的

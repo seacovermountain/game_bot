@@ -419,7 +419,7 @@ pub fn navigate_to_random_point(
             mouse_action::click_at(enigo, click_x, click_y, "【地图导航】点击地图目标点");
 
             // 给引擎一点时间计算路径(青色虚线出现)
-            thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(100));
             true
         }
         None => {
