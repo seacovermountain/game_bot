@@ -36,7 +36,7 @@ pub fn run(app: &mut App) {
             None => println!("⚠️  [截图] 失败，跳过本次循环"),
         }
 
-        sleep(Duration::from_millis(1200));
+        sleep(Duration::from_millis(200));
     }
 }
 
