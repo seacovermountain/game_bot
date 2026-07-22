@@ -269,6 +269,10 @@ fn try_pick_up_items(app: &mut App, text_blocks: &[text_ocr::RawTextBlock]) -> b
 
     mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
     mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
+    mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
+    mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
+    mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
+    mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
     // 🎯 拾取优先级 > 自动攻击 > 自动寻路移动。点击拾取按钮后固定等待
     // 2秒,让角色有时间跑过去把物品捡起来,这段时间内不做怪物攻击/移动
     // 判断(不会打断已经在进行的自动战斗,只是这一轮循环不再额外发出
