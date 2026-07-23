@@ -15,19 +15,14 @@ use xcap::Window;
 
 use crate::asset_loader::{self, IconButton};
 use crate::game_status::GameStatusCache;
-use crate::map_matcher::{self, MapReaderConfig, MapTemplate};
+use crate::map_matcher::MapReaderConfig;
 use crate::map_nav::NavConfig;
 use crate::monster_detector::DetectorConfig;
-use crate::monster_matcher::{self, MonsterTemplate};
 use crate::mouse_action;
 use crate::position_reader::{self, DigitTemplate, PositionReaderConfig};
 use crate::text_ocr::{TextOcrConfig, TextOcrRecognizer};
 use crate::util;
 
-/// 🚶 判断"角色坐标是否停滞"用的两个阈值,原来是 main() 里的局部
-/// const,现在跟着 App 一起放这里,bot_loop 里直接引用。
-pub const STUCK_CHECK_INTERVAL: Duration = Duration::from_secs(4);
-pub const STUCK_MOVE_EPSILON: f64 = 5.0;
 /// 🗺️ 大地图导航失败后的冷却时长,冷却结束会自动重试,而不是永久禁用。
 pub const MAP_NAV_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 
@@ -46,9 +41,7 @@ pub struct App {
     pub nav_cfg: NavConfig,
     pub text_ocr_cfg: TextOcrConfig,
 
-    pub templates: Vec<MonsterTemplate>,
     pub digit_templates: Vec<DigitTemplate>,
-    pub map_templates: Vec<MapTemplate>,
     /// 🎯 怪物 + 物品共用同一个 OCR 引擎、同一份识别配置——一帧只
     /// 识别一次,识别结果分别去匹配怪物白名单和物品白名单。
     pub text_ocr_recognizer: Option<TextOcrRecognizer>,
@@ -118,19 +111,8 @@ impl App {
         let cfg = DetectorConfig::default();
         let pos_cfg = PositionReaderConfig::default();
 
-        let template_dir = util::get_monster_name_template_dir();
-        let templates = match monster_matcher::load_monster_templates(&template_dir) {
-            Ok(list) => list,
-            Err(e) => {
-                println!("⚠️  [怪物模板库] 加载失败: {:?}", e);
-                Vec::new()
-            }
-        };
-        if templates.is_empty() {
-            println!(
-                "ℹ️  [怪物识别] 模板库为空，当前仅通过候选文字框检测是否有怪物。建议先构建 templates/monster_names/ 模板库。"
-            );
-        }
+        // 🕰️ 怪物名字识别已经从"模板匹配"切换成 OCR(见 text_ocr.rs),
+        // 不再需要在启动时加载 templates/monster_names/ 模板库。
 
         let digit_template_dir = util::get_digit_template_dir();
         let digit_templates = match position_reader::load_digit_templates(&digit_template_dir) {
@@ -147,19 +129,8 @@ impl App {
         }
 
         let map_cfg = MapReaderConfig::default();
-        let map_template_dir = util::get_map_name_template_dir();
-        let map_templates = match map_matcher::load_map_templates(&map_template_dir) {
-            Ok(list) => list,
-            Err(e) => {
-                println!("⚠️  [地图名字模板库] 加载失败: {:?}", e);
-                Vec::new()
-            }
-        };
-        if map_templates.is_empty() {
-            println!(
-                "ℹ️  [地图识别] 地图名字模板库为空，暂时无法识别当前地图。建议先构建 templates/map_names/ 模板库。"
-            );
-        }
+        // 🕰️ 地图名字识别已经从"模板匹配"切换成 OCR(见 text_ocr.rs),
+        // 不再需要在启动时加载 templates/map_names/ 模板库。
 
         let text_ocr_cfg = TextOcrConfig::default();
         // 🎯 OCR 引擎只在启动时加载一次(det/rec 模型 + 字典),不要每轮循环
@@ -205,9 +176,7 @@ impl App {
             map_cfg,
             nav_cfg,
             text_ocr_cfg,
-            templates,
             digit_templates,
-            map_templates,
             text_ocr_recognizer,
             dumped_map_debug: false,
             dumped_position_debug,

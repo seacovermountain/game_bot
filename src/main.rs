@@ -20,7 +20,7 @@ use game_bot::{app, bot_loop, quit_game_bot, test_modes};
 
 fn main() {
     println!("🚀 游戏自动化辅助主程序已启动...");
-    println!("⌨️  随时长按 ESC 键满 3 秒即可强制退出...\n");
+    println!("⌨️  随时长按 ESC 键满 2 秒即可强制退出...\n");
 
     // 1. 启动并行后台键盘强杀模块
     quit_game_bot::QuitWatchdog::start_async_loop();

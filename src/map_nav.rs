@@ -107,24 +107,6 @@ fn compute_canvas_rect(frame_w: i32, frame_h: i32, cfg: &NavConfig) -> Rect {
     Rect::new(x, y, w.max(1), h.max(1))
 }
 
-/// 🌍 跟 asset_loader::compute_scale_factor 是同一套逻辑:算物理像素
-/// 与窗口逻辑尺寸之间的缩放系数,方便把"截图里量出来的像素坐标"换算成
-/// "鼠标点击需要的绝对屏幕坐标"。
-fn compute_scale_factor(window: &Window, physical_w: u32, physical_h: u32) -> (f32, f32) {
-    let logical_w = window.width().max(1) as f32;
-    let logical_h = window.height().max(1) as f32;
-
-    let scale_x = physical_w as f32 / logical_w;
-    let scale_y = physical_h as f32 / logical_h;
-
-    if scale_x.is_finite() && scale_x > 0.1 && scale_y.is_finite() && scale_y > 0.1 {
-        (scale_x, scale_y)
-    } else {
-        let fallback = match_icon::get_screen_scale_factor();
-        (fallback, fallback)
-    }
-}
-
 /// 🎲 在画布(BGR Mat,已经是裁出来的黑白可行走区域)里随机挑一个
 /// "灰色可行走、且跟主体区域相通、离边界有一定安全距离"的像素点,
 /// 返回相对画布自身的坐标(不是原图坐标)。
@@ -311,7 +293,7 @@ pub fn close_big_map(
 ) -> bool {
     match find_close_button(raw_rgba, width, height, cfg) {
         Some(((px, py), score)) => {
-            let (scale_x, scale_y) = compute_scale_factor(window, width, height);
+            let (scale_x, scale_y) = util::compute_scale_factor(window, width, height);
             let click_x = window.x() + (px as f32 / scale_x) as i32;
             let click_y = window.y() + (py as f32 / scale_y) as i32;
 
@@ -377,7 +359,7 @@ pub fn navigate_to_random_point(
     match find_close_button(&raw_rgba, width, height, cfg) {
         Some(((px, py), _score)) => {
             // ✅ 识别成功,顺手刷新一次缓存坐标。
-            let (scale_x, scale_y) = compute_scale_factor(window, width, height);
+            let (scale_x, scale_y) = util::compute_scale_factor(window, width, height);
             *close_button_cache = Some((
                 window.x() + (px as f32 / scale_x) as i32,
                 window.y() + (py as f32 / scale_y) as i32,
@@ -408,7 +390,7 @@ pub fn navigate_to_random_point(
             let physical_x = (canvas_rect.x + local_x) as u32;
             let physical_y = (canvas_rect.y + local_y) as u32;
 
-            let (scale_x, scale_y) = compute_scale_factor(window, width, height);
+            let (scale_x, scale_y) = util::compute_scale_factor(window, width, height);
             let click_x = window.x() + (physical_x as f32 / scale_x) as i32;
             let click_y = window.y() + (physical_y as f32 / scale_y) as i32;
 

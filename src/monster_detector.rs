@@ -63,11 +63,6 @@ impl TextBox {
     pub fn looks_merged(&self, typical_name_width: i32) -> bool {
         self.w > (typical_name_width as f64 * 1.6) as i32
     }
-
-    /// 🎯 文字框中心点,方便后续换算成鼠标点击/锁定目标的屏幕坐标
-    pub fn center(&self) -> (i32, i32) {
-        (self.x + self.w / 2, self.y + self.h / 2)
-    }
 }
 
 /// 检测参数配置。所有 ROI 边界用比例(0.0~1.0)表示,而不是绝对像素,

@@ -28,9 +28,14 @@
 //!    - 具体识别错误/未命中的文件列表(文件路径 + 期望名字 + 实际匹配结果 + 匹配分数)
 //!
 //! ⚠️ 注意:这里用的是 `monster_matcher::identify_crop`,直接对"已经裁好的
-//! 单张候选框图片"做模板匹配,不套用整帧检测(`identify_monsters`)里那套
-//! 按整帧宽度换算缩放系数的逻辑——因为这里的输入本来就是单独裁出来的小图,
-//! 没有"整帧宽度"这个概念,跟建模板库时用的是同一套物理分辨率。
+//! 单张候选框图片"做模板匹配,不做"按整帧宽度换算缩放系数"这一步——
+//! 因为这里的输入本来就是单独裁出来的小图,没有"整帧宽度"这个概念,
+//! 跟建模板库时用的是同一套物理分辨率。
+//!
+//! 🕰️ 历史说明:bot_loop.rs 里实时挂机的怪物识别已经从模板匹配换成了
+//! OCR(见 text_ocr::match_monsters),不再调用这里的模板匹配逻辑。
+//! 这个工具现在纯粹是用来单独评估 `templates/monster_names/` 模板库
+//! 本身的识别准确率,跟实时挂机流程已经没有直接关系了。
 
 use game_bot::monster_matcher::{self, MonsterTemplate};
 use game_bot::util;
@@ -73,8 +78,9 @@ fn main() {
             p.to_string_lossy().into_owned()
         });
 
-    // 跟 bot_loop.rs 里 identify_monsters 用的阈值(0.75)保持一致,
-    // 这样测出来的识别率才是"跟挂机时实际表现一致"的数字。
+    // 默认阈值 0.75 是这个测试工具自己的模板匹配置信度门槛,注意它跟
+    // bot_loop.rs 实时挂机用的 OCR 置信度(TextOcrConfig.min_confidence,
+    // 目前是 0.5)不是同一套指标,两者不能直接比较或换算。
     let min_confidence: f32 = args
         .get(2)
         .and_then(|s| s.parse().ok())

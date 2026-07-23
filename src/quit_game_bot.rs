@@ -40,7 +40,7 @@ impl QuitWatchdog {
                             }
                         }
                         None => {
-                            println!("🎵 [独立守护线程] 检测到按下 ESC，启动 3 秒安全计时...");
+                            println!("🎵 [独立守护线程] 检测到按下 ESC，启动 2 秒安全计时...");
                             esc_pressed_start = Some(Instant::now());
                         }
                     }

@@ -4,7 +4,6 @@ use chrono::Local;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
-use std::time::{Duration, Instant};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct HuntingConfig {
@@ -76,7 +75,7 @@ pub struct EntityInfo {
     pub confidence: f32, // 识别置信度(模板匹配分数,0.0~1.0)
 }
 
-/// 🎯 本轮"移动状态"判断结果,细分成五种含义不同的情况,方便调用方
+/// 🎯 本轮"移动状态"判断结果,细分成四种含义不同的情况,方便调用方
 /// 打印准确的日志,而不是笼统地都算作"没有卡住"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MovementStatus {
@@ -84,11 +83,9 @@ pub enum MovementStatus {
     NoPosition,
     /// 第一次记录基准坐标,还没开始判断
     FirstObservation,
-    /// 还没到 check_interval 这个检查点,先观察
-    Cooling,
-    /// 到了检查点,判定角色确实在移动
+    /// 跟上一轮读到的坐标相比,确实变了,判定角色在移动
     Moving,
-    /// 到了检查点,判定角色卡住了(坐标基本没变)
+    /// 跟上一轮读到的坐标相比,完全没变,判定角色卡住了
     Stalled,
 }
 
@@ -113,13 +110,12 @@ pub struct GameStatusCache {
     // 4.5 🔊 从 config.toml [logging] 段加载的日志开关
     pub logging: LoggingConfig,
 
-    // 5. 🎯 移动状态判断:角色坐标是否"长时间没有变化"(卡住/空闲),
+    // 5. 🎯 移动状态判断:角色坐标是否"跟上一轮相比完全没变"(卡住),
     // 用于决定要不要打开大地图重新选择目标点。
     // 复用 update_position 已经缓存的实时坐标做判断,而不是在别的模块
     // (比如 map_nav.rs)里再单独维护一套平行状态 —— 跟 target.md 里
     // "先把实时信息统一缓存起来,再根据缓存信息做业务处理"的设计保持一致。
     last_movement_check_position: Option<(i32, i32)>,
-    last_movement_check_at: Option<Instant>,
 }
 
 impl GameStatusCache {
@@ -168,16 +164,10 @@ impl GameStatusCache {
     pub fn update_map_name(&mut self, name: String) {
         self.map_name = name;
     }
-    /// 🎯 判断角色本轮的"移动状态"细分成五种含义不同的情况,而不是
-    /// 笼统地返回一个 bool——不然调用方没法区分"真的在移动"和"还没到
-    /// 检查时间点/没读到坐标"这几种完全不同的场景,日志也会因此写得
-    /// 不准确。
-    ///
-    /// 每隔 check_interval 才会真正做一次"动没动"的判断;这段时间内
-    /// 直接返回 `Cooling`,给角色留出时间真正走出位移,避免拿两次间隔
-    /// 太短的坐标比较导致误判。判断完(不管结果是 Moving 还是 Stalled)
-    /// 都会重新记录一次基准坐标和时间,自然形成两次判断之间的冷却间隔,
-    /// 不需要再额外单独维护一个冷却计时器。
+
+    /// 🎯 判断角色本轮的"移动状态",每一轮都跟上一轮读到的坐标严格比对
+    /// (坐标是数字模板匹配读出来的,准确率高,不需要留容差,也不需要
+    /// 等固定的时间间隔才检查——直接每帧比对,反应更快)。
     ///
     /// `current_position` 传入这一轮 position_reader 实际读到的坐标
     /// (读取失败传 None),而不是直接读 self.player_x/player_y —— 因为
@@ -186,37 +176,22 @@ impl GameStatusCache {
     pub fn check_movement_status(
         &mut self,
         current_position: Option<(i32, i32)>,
-        move_epsilon: f64,
-        check_interval: Duration,
     ) -> MovementStatus {
         let current = match current_position {
             Some(p) => p,
             None => return MovementStatus::NoPosition, // 坐标没读到,没法判断
         };
 
-        match (
-            self.last_movement_check_position,
-            self.last_movement_check_at,
-        ) {
-            (None, _) | (_, None) => {
+        match self.last_movement_check_position {
+            None => {
                 // 第一次记录基准坐标,先观察一轮,不立即判断
                 self.last_movement_check_position = Some(current);
-                self.last_movement_check_at = Some(Instant::now());
                 MovementStatus::FirstObservation
             }
-            (Some(prev), Some(t)) => {
-                if t.elapsed() < check_interval {
-                    return MovementStatus::Cooling;
-                }
-
-                let dx = (current.0 - prev.0) as f64;
-                let dy = (current.1 - prev.1) as f64;
-                let dist = (dx * dx + dy * dy).sqrt();
-
+            Some(prev) => {
                 self.last_movement_check_position = Some(current);
-                self.last_movement_check_at = Some(Instant::now());
 
-                if dist < move_epsilon {
+                if current == prev {
                     MovementStatus::Stalled
                 } else {
                     MovementStatus::Moving
@@ -229,7 +204,6 @@ impl GameStatusCache {
     /// 基准坐标误判"没动"。
     pub fn reset_movement_check(&mut self) {
         self.last_movement_check_position = None;
-        self.last_movement_check_at = None;
     }
 
     /// 👾 用本轮识别出的白名单怪物列表,整体替换掉缓存里的旧数据。

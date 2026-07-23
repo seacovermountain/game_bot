@@ -15,7 +15,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::app::{App, MAP_NAV_RETRY_COOLDOWN, STUCK_CHECK_INTERVAL, STUCK_MOVE_EPSILON};
+use crate::app::{App, MAP_NAV_RETRY_COOLDOWN};
 use crate::game_status::EntityInfo;
 use crate::map_matcher;
 use crate::map_nav;
@@ -90,8 +90,8 @@ fn run_one_frame(app: &mut App, raw_rgba: &[u8], width: u32, height: u32) {
     }
 
     if picked_up {
-        // 拾取那 2 秒等待已经在 try_pick_up_items 里睡过了,这里提前
-        // return,跳过外层循环末尾那次额外的 1200ms 等待,尽快进入下一轮。
+        // 拾取那 1 秒等待已经在 try_pick_up_items 里睡过了,这里提前
+        // return,跳过外层循环末尾那次额外的 200ms 等待,尽快进入下一轮。
         return;
     }
 }
@@ -274,11 +274,11 @@ fn try_pick_up_items(app: &mut App, text_blocks: &[text_ocr::RawTextBlock]) -> b
     mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
     mouse_action::click_at(&mut app.enigo, x, y, "【自动拾取】发现白名单物品");
     // 🎯 拾取优先级 > 自动攻击 > 自动寻路移动。点击拾取按钮后固定等待
-    // 2秒,让角色有时间跑过去把物品捡起来,这段时间内不做怪物攻击/移动
+    // 1秒,让角色有时间跑过去把物品捡起来,这段时间内不做怪物攻击/移动
     // 判断(不会打断已经在进行的自动战斗,只是这一轮循环不再额外发出
     // 攻击/移动指令),直接跳到下一轮循环重新截图判断。
     if app.live_status.logging.item {
-        println!("⏳ [拾取] 等待角色跑过去拾取(约2秒)，本轮跳过打怪/寻路判断...");
+        println!("⏳ [拾取] 等待角色跑过去拾取(约1秒)，本轮跳过打怪/寻路判断...");
     }
     sleep(Duration::from_secs(1));
     true
@@ -360,11 +360,7 @@ fn attack(app: &mut App) {
 }
 
 fn maybe_move(app: &mut App, current_position: Option<(i32, i32)>) {
-    let status = app.live_status.check_movement_status(
-        current_position,
-        STUCK_MOVE_EPSILON,
-        STUCK_CHECK_INTERVAL,
-    );
+    let status = app.live_status.check_movement_status(current_position);
 
     match status {
         MovementStatus::NoPosition => {
@@ -376,12 +372,6 @@ fn maybe_move(app: &mut App, current_position: Option<(i32, i32)>) {
         MovementStatus::FirstObservation => {
             if app.live_status.logging.movement {
                 println!("🚶 [移动] 记录初始基准坐标,先观察一轮...");
-            }
-            return;
-        }
-        MovementStatus::Cooling => {
-            if app.live_status.logging.movement {
-                println!("🚶 [移动] 还没到卡住检查点,继续观察...");
             }
             return;
         }
